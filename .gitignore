@@ -1,0 +1,20 @@
+# 编译产物
+bin/
+obj/
+
+# 用户配置文件（包含 API Key）
+ai_config.json
+
+# 翻译数据（用户本地数据）
+collected_texts.json
+translations.json
+
+# IDE 配置
+.vs/
+.vscode/
+*.suo
+*.user
+
+# 系统文件
+Thumbs.db
+.DS_Store
