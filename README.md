@@ -25,7 +25,7 @@ Project: Gorgon 游戏中文汉化插件，自动收集游戏文本并使用 AI 
 | `max_retries` | int | 失败重试次数 | `3` |
 | `timeout_seconds` | int | 请求超时时间（秒） | `30` |
 | `auto_translate` | bool | 是否启用自动翻译 | `true` 或 `false` |
-| `translation_prompt` | string | AI 翻译提示词 | 见默认配置 |
+| `translation_prompt` | string | AI 翻译提示词 | 你是一个专业的游戏本地化翻译助手。请将以下文本翻译成简体中文。要求：1. 使用中文标点符号，如逗号句号问号叹号等；2. 按编号返回翻译结果，每行一个翻译结果，格式为：[编号] 翻译结果；3. 保持原文的格式和特殊符号；4. 只返回翻译结果，不要添加任何解释。 | 
 
 ### 常用 AI 平台配置
 
