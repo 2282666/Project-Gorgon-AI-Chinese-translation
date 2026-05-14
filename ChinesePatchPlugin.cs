@@ -4,9 +4,9 @@ using BepInEx.Logging;
 using HarmonyLib;
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace GorgonChinesePatch
 {
@@ -29,7 +29,10 @@ namespace GorgonChinesePatch
         public static Type GameObjectType { get; private set; }
         public static Type TransformType { get; private set; }
         public static Type UnityObjectType { get; private set; }
-        public static Type SceneManagerType { get; private set; }
+
+        private static DateTime _lastScanTime = DateTime.MinValue;
+        private static readonly object _scanLock = new object();
+        private static bool _scanRequested;
 
         public override void Load()
         {
@@ -60,68 +63,99 @@ namespace GorgonChinesePatch
 
             HarmonyInstance = new Harmony(PluginGuid);
 
-            if (TextType != null)
-            {
-                try
-                {
-                    var setTextMethod = TextType.GetMethod("set_text", BindingFlags.Instance | BindingFlags.Public);
-                    if (setTextMethod != null)
-                    {
-                        var prefix = new HarmonyMethod(typeof(TextPatch), nameof(TextPatch.Prefix));
-                        HarmonyInstance.Patch(setTextMethod, prefix);
-                        Log.LogInfo("Text 补丁应用成功");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.LogWarning($"Text 补丁失败: {ex.Message}");
-                }
-            }
+            PatchTextSetText();
+            PatchTMPTextSetText();
+            PatchTMPTextSetTextMethod();
 
-            if (TMPTextType != null)
-            {
-                try
-                {
-                    var setTextMethod = TMPTextType.GetMethod("set_text", BindingFlags.Instance | BindingFlags.Public);
-                    if (setTextMethod != null)
-                    {
-                        var prefix = new HarmonyMethod(typeof(TMPTextPatch), nameof(TMPTextPatch.Prefix));
-                        HarmonyInstance.Patch(setTextMethod, prefix);
-                        Log.LogInfo("TMP_Text 补丁应用成功");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.LogWarning($"TMP_Text 补丁失败: {ex.Message}");
-                }
-            }
-
-            Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                ScanAllTexts();
-            });
-
-            if (SceneManagerType != null)
-            {
-                try
-                {
-                    var addSceneLoadedHandler = SceneManagerType.GetEvent("sceneLoaded");
-                    if (addSceneLoadedHandler != null)
-                    {
-                        var methodInfo = typeof(ChinesePatchPlugin).GetMethod("OnSceneLoaded", BindingFlags.NonPublic | BindingFlags.Static);
-                        var delegateInstance = Delegate.CreateDelegate(addSceneLoadedHandler.EventHandlerType, methodInfo);
-                        addSceneLoadedHandler.AddEventHandler(null, delegateInstance);
-                        Log.LogInfo("场景加载事件监听已添加");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.LogWarning($"添加场景加载监听失败: {ex.Message}");
-                }
-            }
+            _scanRequested = true;
 
             Log.LogInfo("GorgonChinesePatch 加载完成！" + TranslationMgr.GetStats());
+        }
+
+        /// <summary>
+        /// 为 UnityEngine.UI.Text 的 set_text 属性添加钩子
+        /// </summary>
+        private void PatchTextSetText()
+        {
+            if (TextType == null) return;
+
+            try
+            {
+                var textProp = TextType.GetProperty("text");
+                var setTextMethod = textProp?.GetSetMethod(true);
+                if (setTextMethod != null)
+                {
+                    Log.LogInfo($"找到 Text.set_text 方法: {setTextMethod.DeclaringType?.Name}");
+                    var prefix = new HarmonyMethod(typeof(TextPatch), nameof(TextPatch.Prefix));
+                    HarmonyInstance.Patch(setTextMethod, prefix);
+                    Log.LogInfo("Text.set_text 补丁应用成功");
+                }
+                else
+                {
+                    Log.LogWarning("未找到 Text.set_text 方法");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"Text.set_text 补丁失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 为 TMPro.TMP_Text 的 set_text 属性添加钩子
+        /// </summary>
+        private void PatchTMPTextSetText()
+        {
+            if (TMPTextType == null) return;
+
+            try
+            {
+                var textProp = TMPTextType.GetProperty("text");
+                var setTextMethod = textProp?.GetSetMethod(true);
+                if (setTextMethod != null)
+                {
+                    Log.LogInfo($"找到 TMP_Text.set_text 方法: {setTextMethod.DeclaringType?.Name}");
+                    var prefix = new HarmonyMethod(typeof(TMPTextPatch), nameof(TMPTextPatch.Prefix));
+                    HarmonyInstance.Patch(setTextMethod, prefix);
+                    Log.LogInfo("TMP_Text.set_text 补丁应用成功");
+                }
+                else
+                {
+                    Log.LogWarning("未找到 TMP_Text.set_text 方法");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"TMP_Text.set_text 补丁失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 为 TMPro.TMP_Text 的 SetText 方法添加钩子（很多UI使用此方法而非属性设置器）
+        /// </summary>
+        private void PatchTMPTextSetTextMethod()
+        {
+            if (TMPTextType == null) return;
+
+            try
+            {
+                var setTextMethod = TMPTextType.GetMethod("SetText", new[] { typeof(string) });
+                if (setTextMethod != null)
+                {
+                    Log.LogInfo($"找到 TMP_Text.SetText 方法: {setTextMethod.DeclaringType?.Name}");
+                    var prefix = new HarmonyMethod(typeof(TMPTextSetTextPatch), nameof(TMPTextSetTextPatch.Prefix));
+                    HarmonyInstance.Patch(setTextMethod, prefix);
+                    Log.LogInfo("TMP_Text.SetText 补丁应用成功");
+                }
+                else
+                {
+                    Log.LogInfo("未找到 TMP_Text.SetText(string) 方法");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"TMP_Text.SetText 补丁失败: {ex.Message}");
+            }
         }
 
         private void InitializeUnityTypes()
@@ -147,8 +181,6 @@ namespace GorgonChinesePatch
                             TransformType = assembly.GetType("UnityEngine.Transform");
                         if (UnityObjectType == null)
                             UnityObjectType = assembly.GetType("UnityEngine.Object");
-                        if (SceneManagerType == null)
-                            SceneManagerType = assembly.GetType("UnityEngine.SceneManagement.SceneManager");
                     }
                 }
 
@@ -168,6 +200,9 @@ namespace GorgonChinesePatch
             }
         }
 
+        /// <summary>
+        /// 获取 GameObject 在场景中的完整路径
+        /// </summary>
         public static string GetGameObjectPath(object obj)
         {
             if (obj == null || TransformType == null)
@@ -202,6 +237,45 @@ namespace GorgonChinesePatch
             }
         }
 
+        /// <summary>
+        /// 请求在主线程上执行扫描（由钩子触发）
+        /// </summary>
+        public static void RequestScan()
+        {
+            lock (_scanLock)
+            {
+                if ((DateTime.Now - _lastScanTime).TotalSeconds > 10)
+                {
+                    _scanRequested = true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 在主线程上执行扫描（由钩子调用）
+        /// </summary>
+        public static void TryScanOnMainThread()
+        {
+            bool shouldScan = false;
+            lock (_scanLock)
+            {
+                if (_scanRequested && (DateTime.Now - _lastScanTime).TotalSeconds > 10)
+                {
+                    shouldScan = true;
+                    _scanRequested = false;
+                    _lastScanTime = DateTime.Now;
+                }
+            }
+
+            if (shouldScan)
+            {
+                ScanAllTexts();
+            }
+        }
+
+        /// <summary>
+        /// 扫描场景中所有文本组件，收集未翻译的文本
+        /// </summary>
         public static void ScanAllTexts()
         {
             try
@@ -222,62 +296,105 @@ namespace GorgonChinesePatch
 
                     try
                     {
-                        var findObjects = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type) }, null);
-                        if (findObjects == null)
-                        {
-                            findObjects = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type), typeof(bool) }, null);
-                        }
+                        Array objects = null;
 
-                        if (findObjects != null)
+                        var findGeneric = UnityObjectType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                            .FirstOrDefault(m => m.Name == "FindObjectsOfType" && m.IsGenericMethod);
+
+                        if (findGeneric != null)
                         {
-                            var objects = findObjects.Invoke(null, new object[] { textType }) as Array;
-                            if (objects != null)
+                            try
                             {
-                                foreach (var obj in objects)
+                                var specialized = findGeneric.MakeGenericMethod(textType);
+                                var result = specialized.Invoke(null, null);
+                                if (result != null)
                                 {
-                                    try
+                                    var lengthProp = result.GetType().GetProperty("Length");
+                                    if (lengthProp != null)
                                     {
-                                        var textProp = textType.GetProperty("text");
-                                        var text = textProp?.GetValue(obj)?.ToString();
-                                        if (!string.IsNullOrEmpty(text))
-                                        {
-                                            var gameObjectProp = textType.GetProperty("gameObject");
-                                            var gameObject = gameObjectProp?.GetValue(obj);
-                                            var path = gameObject != null ? GetGameObjectPath(gameObject) : "";
+                                        var length = (int)lengthProp.GetValue(result);
+                                        Log.LogInfo($"[泛型扫描] 找到 {length} 个 {textType.Name} 组件");
 
-                                            if (ChatFilterMgr.ShouldTranslate(path, text))
-                                            {
-                                                TextCollectorMgr.CollectText(text);
-                                                count++;
-                                            }
+                                        objects = Array.CreateInstance(textType, length);
+                                        var itemProp = result.GetType().GetProperty("Item", new[] { typeof(int) });
+                                        for (int i = 0; i < length; i++)
+                                        {
+                                            var item = itemProp?.GetValue(result, new object[] { i });
+                                            objects.SetValue(item, i);
                                         }
                                     }
-                                    catch { }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.LogInfo($"泛型 FindObjectsOfType 失败: {ex.Message}");
+                            }
+                        }
+
+                        if (objects == null)
+                        {
+                            var findNonGeneric = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type) }, null);
+                            if (findNonGeneric == null)
+                            {
+                                findNonGeneric = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type), typeof(bool) }, null);
+                            }
+
+                            if (findNonGeneric != null)
+                            {
+                                try
+                                {
+                                    objects = findNonGeneric.Invoke(null, new object[] { textType }) as Array;
+                                    Log.LogInfo($"[非泛型扫描] 找到 {objects?.Length ?? 0} 个 {textType.Name} 组件");
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.LogInfo($"非泛型 FindObjectsOfType 失败: {ex.Message}");
                                 }
                             }
                         }
+
+                        if (objects != null)
+                        {
+                            foreach (var obj in objects)
+                            {
+                                try
+                                {
+                                    var textProp = textType.GetProperty("text");
+                                    var text = textProp?.GetValue(obj)?.ToString();
+                                    if (!string.IsNullOrEmpty(text))
+                                    {
+                                        var gameObjectProp = textType.GetProperty("gameObject");
+                                        var gameObject = gameObjectProp?.GetValue(obj);
+                                        var path = gameObject != null ? GetGameObjectPath(gameObject) : "";
+
+                                        if (ChatFilterMgr.ShouldTranslate(path, text))
+                                        {
+                                            TextCollectorMgr.CollectText(text);
+                                            count++;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Log.LogInfo($"扫描 {textType?.Name ?? "null"} 类型出错: {ex.Message}");
+                    }
                 }
-                Log.LogInfo($"扫描完成，共收集 {count} 条文本");
+                Log.LogInfo($"扫描完成，共收集 {count} 条新文本");
             }
             catch (Exception ex)
             {
                 Log.LogWarning($"扫描文本失败: {ex.Message}");
             }
         }
-
-        private static void OnSceneLoaded(object scene, object loadSceneMode)
-        {
-            Log.LogInfo("场景加载完成，开始扫描文本...");
-            Task.Run(async () =>
-            {
-                await Task.Delay(2000);
-                ScanAllTexts();
-            });
-        }
     }
 
+    /// <summary>
+    /// UnityEngine.UI.Text 的 set_text 钩子
+    /// </summary>
     public static class TextPatch
     {
         public static void Prefix(object __instance, ref string value)
@@ -287,11 +404,11 @@ namespace GorgonChinesePatch
 
             try
             {
+                ChinesePatchPlugin.TryScanOnMainThread();
+
                 var gameObjectProp = __instance.GetType().GetProperty("gameObject");
                 var gameObject = gameObjectProp?.GetValue(__instance);
                 string path = gameObject != null ? ChinesePatchPlugin.GetGameObjectPath(gameObject) : "";
-
-                ChinesePatchPlugin.Log.LogDebug($"[TextHook] path={path}, text={value.Substring(0, Math.Min(50, value.Length))}");
 
                 if (ShouldTranslate(__instance, value))
                 {
@@ -323,6 +440,9 @@ namespace GorgonChinesePatch
         }
     }
 
+    /// <summary>
+    /// TMPro.TMP_Text 的 set_text 属性钩子
+    /// </summary>
     public static class TMPTextPatch
     {
         public static void Prefix(object __instance, ref string value)
@@ -332,9 +452,55 @@ namespace GorgonChinesePatch
 
             try
             {
+                ChinesePatchPlugin.TryScanOnMainThread();
+
                 if (ShouldTranslate(__instance, value))
                 {
                     value = ChinesePatchPlugin.TranslationMgr.Translate(value);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        static bool ShouldTranslate(object textComponent, string newText)
+        {
+            try
+            {
+                var gameObjectProp = textComponent.GetType().GetProperty("gameObject");
+                var gameObject = gameObjectProp?.GetValue(textComponent);
+                if (gameObject == null)
+                    return false;
+
+                string path = ChinesePatchPlugin.GetGameObjectPath(gameObject);
+
+                return ChinesePatchPlugin.ChatFilterMgr.ShouldTranslate(path, newText);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// TMPro.TMP_Text 的 SetText 方法钩子（参数名为 sourceText）
+    /// </summary>
+    public static class TMPTextSetTextPatch
+    {
+        public static void Prefix(object __instance, ref string sourceText)
+        {
+            if (string.IsNullOrEmpty(sourceText))
+                return;
+
+            try
+            {
+                ChinesePatchPlugin.TryScanOnMainThread();
+
+                if (ShouldTranslate(__instance, sourceText))
+                {
+                    sourceText = ChinesePatchPlugin.TranslationMgr.Translate(sourceText);
                 }
             }
             catch
