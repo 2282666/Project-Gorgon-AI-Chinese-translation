@@ -63,6 +63,9 @@ namespace GorgonChinesePatch
             _skipTextPatterns.Add(new Regex(@"^<sprite=\d+>\s*\d+$", RegexOptions.Compiled));
             _skipTextPatterns.Add(new Regex(@"fps", RegexOptions.Compiled | RegexOptions.IgnoreCase));
             _skipTextPatterns.Add(new Regex(@"framerate", RegexOptions.Compiled | RegexOptions.IgnoreCase));
+            _skipTextPatterns.Add(new Regex(@"\(\d{1,2}:\d{2}\)$", RegexOptions.Compiled));
+            _skipTextPatterns.Add(new Regex(@"^\[.*\]\s*$", RegexOptions.Compiled));
+            _skipTextPatterns.Add(new Regex(@"^\s*$", RegexOptions.Compiled));
 
             _uiPathPatterns.Add(new Regex(@"Chat", RegexOptions.Compiled | RegexOptions.IgnoreCase));
             _uiPathPatterns.Add(new Regex(@"Social", RegexOptions.Compiled | RegexOptions.IgnoreCase));
