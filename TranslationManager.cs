@@ -20,6 +20,7 @@ namespace GorgonChinesePatch
         private bool _autoTranslateEnabled;
         private Task _translationTask;
         private bool _isTranslating;
+        private System.Timers.Timer _checkTimer;
 
         public int TranslationCount => _translations.Count;
 
@@ -147,6 +148,48 @@ namespace GorgonChinesePatch
         {
             _autoTranslateEnabled = true;
             _log.LogInfo("自动翻译已启用");
+
+            _checkTimer = new System.Timers.Timer(3000);
+            _checkTimer.Elapsed += async (s, e) => await CheckAndTranslate();
+            _checkTimer.Start();
+            _log.LogInfo("定期检查已启动，每3秒检查一次新文本");
+        }
+
+        private async Task CheckAndTranslate()
+        {
+            if (_autoTranslateEnabled && _aiManager.IsConfigured && !_isTranslating)
+            {
+                var untranslated = _textCollector.GetUntranslatedTexts(50);
+                if (untranslated.Count > 0)
+                {
+                    _isTranslating = true;
+                    try
+                    {
+                        _log.LogInfo($"检测到 {untranslated.Count} 条新文本，开始翻译...");
+                        var results = await _aiManager.TranslateBatchAsync(untranslated);
+
+                        foreach (var kvp in results)
+                        {
+                            _textCollector.AddTranslation(kvp.Key, kvp.Value);
+                            lock (_lock)
+                            {
+                                _translations[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        SaveTranslations();
+                        _log.LogInfo($"定期检查翻译完成，已翻译 {results.Count} 条");
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogError($"定期检查翻译出错: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _isTranslating = false;
+                    }
+                }
+            }
         }
 
         public void DisableAutoTranslate()

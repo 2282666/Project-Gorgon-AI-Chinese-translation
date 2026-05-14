@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace GorgonChinesePatch
 {
@@ -27,6 +28,8 @@ namespace GorgonChinesePatch
         public static Type TMPTextType { get; private set; }
         public static Type GameObjectType { get; private set; }
         public static Type TransformType { get; private set; }
+        public static Type UnityObjectType { get; private set; }
+        public static Type SceneManagerType { get; private set; }
 
         public override void Load()
         {
@@ -93,6 +96,31 @@ namespace GorgonChinesePatch
                 }
             }
 
+            Task.Run(async () =>
+            {
+                await Task.Delay(5000);
+                ScanAllTexts();
+            });
+
+            if (SceneManagerType != null)
+            {
+                try
+                {
+                    var addSceneLoadedHandler = SceneManagerType.GetEvent("sceneLoaded");
+                    if (addSceneLoadedHandler != null)
+                    {
+                        var methodInfo = typeof(ChinesePatchPlugin).GetMethod("OnSceneLoaded", BindingFlags.NonPublic | BindingFlags.Static);
+                        var delegateInstance = Delegate.CreateDelegate(addSceneLoadedHandler.EventHandlerType, methodInfo);
+                        addSceneLoadedHandler.AddEventHandler(null, delegateInstance);
+                        Log.LogInfo("场景加载事件监听已添加");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning($"添加场景加载监听失败: {ex.Message}");
+                }
+            }
+
             Log.LogInfo("GorgonChinesePatch 加载完成！" + TranslationMgr.GetStats());
         }
 
@@ -117,6 +145,10 @@ namespace GorgonChinesePatch
                             GameObjectType = assembly.GetType("UnityEngine.GameObject");
                         if (TransformType == null)
                             TransformType = assembly.GetType("UnityEngine.Transform");
+                        if (UnityObjectType == null)
+                            UnityObjectType = assembly.GetType("UnityEngine.Object");
+                        if (SceneManagerType == null)
+                            SceneManagerType = assembly.GetType("UnityEngine.SceneManagement.SceneManager");
                     }
                 }
 
@@ -169,6 +201,81 @@ namespace GorgonChinesePatch
                 return "";
             }
         }
+
+        public static void ScanAllTexts()
+        {
+            try
+            {
+                if (UnityObjectType == null)
+                {
+                    Log.LogWarning("无法扫描文本：未找到 UnityEngine.Object 类型");
+                    return;
+                }
+
+                int count = 0;
+                Type[] textTypes = new Type[] { TextType, TMPTextType };
+
+                foreach (var textType in textTypes)
+                {
+                    if (textType == null)
+                        continue;
+
+                    try
+                    {
+                        var findObjects = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type) }, null);
+                        if (findObjects == null)
+                        {
+                            findObjects = UnityObjectType.GetMethod("FindObjectsOfType", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(Type), typeof(bool) }, null);
+                        }
+
+                        if (findObjects != null)
+                        {
+                            var objects = findObjects.Invoke(null, new object[] { textType }) as Array;
+                            if (objects != null)
+                            {
+                                foreach (var obj in objects)
+                                {
+                                    try
+                                    {
+                                        var textProp = textType.GetProperty("text");
+                                        var text = textProp?.GetValue(obj)?.ToString();
+                                        if (!string.IsNullOrEmpty(text))
+                                        {
+                                            var gameObjectProp = textType.GetProperty("gameObject");
+                                            var gameObject = gameObjectProp?.GetValue(obj);
+                                            var path = gameObject != null ? GetGameObjectPath(gameObject) : "";
+
+                                            if (ChatFilterMgr.ShouldTranslate(path, text))
+                                            {
+                                                TextCollectorMgr.CollectText(text);
+                                                count++;
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                Log.LogInfo($"扫描完成，共收集 {count} 条文本");
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"扫描文本失败: {ex.Message}");
+            }
+        }
+
+        private static void OnSceneLoaded(object scene, object loadSceneMode)
+        {
+            Log.LogInfo("场景加载完成，开始扫描文本...");
+            Task.Run(async () =>
+            {
+                await Task.Delay(2000);
+                ScanAllTexts();
+            });
+        }
     }
 
     public static class TextPatch
@@ -180,6 +287,12 @@ namespace GorgonChinesePatch
 
             try
             {
+                var gameObjectProp = __instance.GetType().GetProperty("gameObject");
+                var gameObject = gameObjectProp?.GetValue(__instance);
+                string path = gameObject != null ? ChinesePatchPlugin.GetGameObjectPath(gameObject) : "";
+
+                ChinesePatchPlugin.Log.LogDebug($"[TextHook] path={path}, text={value.Substring(0, Math.Min(50, value.Length))}");
+
                 if (ShouldTranslate(__instance, value))
                 {
                     value = ChinesePatchPlugin.TranslationMgr.Translate(value);
